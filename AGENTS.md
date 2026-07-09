@@ -303,9 +303,10 @@ cd CredChain_Golang && docker compose up -d anvil postgres mongo
 
 # One-time setup (local Go)
 make migrate-up
-make init-super-admin
-make seed
-make seed-chain
+
+# Pick ONE path — they are mutually exclusive:
+# Production: make init-super-admin
+# Testing:    make seed && make seed-chain
 
 # Start backend
 make serve
