@@ -27,11 +27,15 @@ Mirrored across all CredChain components (Go, React, Python consume this schema)
 cp .env.example .env
 # Set PRIVATE_KEY, RPC URLs, INITIAL_SUPER_ADMIN_WALLET_ADDRESS
 npm install
-npx hardhat compile
-npx hardhat test
+make compile
+make test
 ```
 
 ## Deploy
+
+Local-chain deploy is automated by the orchestrator (`cd ../CredChain_Golang && make dev-up`),
+which runs `scripts/deploy.ts` against Anvil and wires the addresses into the backend. Deploy by
+hand only for real networks:
 
 ```bash
 # Amoy testnet (recommended)
@@ -39,10 +43,6 @@ npx hardhat run scripts/deploy.ts --network amoy
 
 # Polygon mainnet
 npx hardhat run scripts/deploy.ts --network polygon
-
-# Local development
-npx hardhat node &
-npx hardhat run scripts/deploy.ts --network localhost
 ```
 
 Mumbai is deprecated (retired April 2024). Use Amoy instead.
@@ -51,10 +51,10 @@ Mumbai is deprecated (retired April 2024). Use Amoy instead.
 
 | Command | Purpose |
 |---|---|
-| `npx hardhat compile` | Compile contracts |
-| `npx hardhat test` | Run 69 tests |
+| `make compile` | Compile contracts |
+| `make test` | Run 69 tests |
 | `npx hardhat coverage` | Generate coverage report |
-| `npx hardhat node` | Start local Ethereum node |
+| `npx hardhat test test/<file>` | Run a single test file |
 
 ## Related Docs
 

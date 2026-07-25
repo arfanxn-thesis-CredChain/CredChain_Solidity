@@ -15,14 +15,17 @@ Sibling to `CredChain_Golang/` (backend API), `CredChain_React/` (frontend), and
 ## Critical Commands
 
 ```bash
-npx hardhat compile                                   # compile contracts → artifacts/ + typechain-types/
-npx hardhat test                                      # run all tests (69 tests, chai/mocha)
+make compile                                          # compile contracts → artifacts/ + typechain-types/
+make test                                             # run all tests (69 tests, chai/mocha)
+
 npx hardhat test test/02-credential.test.ts           # run a single test file
 npx hardhat coverage                                  # solidity-coverage report → coverage/ + coverage.json
-npx hardhat run scripts/deploy.ts --network polygon   # deploy to Polygon mainnet
-npx hardhat run scripts/deploy.ts --network mumbai    # deploy to Mumbai testnet (deprecated)
-npx hardhat run scripts/deploy.ts --network amoy      # deploy to Amoy testnet
 npx hardhat clean                                     # remove artifacts/ + cache/
+
+# Local-chain deploy is owned by the orchestrator (CredChain_Golang: make up / dev-up),
+# which also wires the new addresses into Go's env. Only real-network deploys are manual:
+npx hardhat run scripts/deploy.ts --network polygon   # deploy to Polygon mainnet
+npx hardhat run scripts/deploy.ts --network amoy      # deploy to Amoy testnet
 ```
 
 No CI pipeline is configured. No lint script exists in `package.json`. Tests must pass before any push (see Deployment section).
@@ -268,49 +271,30 @@ Response/error codes on the Go side use a 6-digit `AABBCC` format with categorie
 
 Before pushing, run the repo's canonical verification command and confirm it passes:
 
-- `CredChain_Golang`: `go test ./... && go vet ./... && gofmt -l .` (last must produce zero output)
-- `CredChain_Solidity`: `npx hardhat compile && npx hardhat test`
-- `CredChain_Python`: `make lint && make typecheck && make test`
-- `CredChain_React`: `npm run lint && npm run build && npm run test && npm run check-locales`
+- `CredChain_Golang`: `make test && make lint`
+- `CredChain_Solidity`: `make compile && make test`
+- `CredChain_Python`: `make check`
+- `CredChain_React`: `make lint && make build && make test && npm run check-locales`
 
 ## Local Dev Chain Persistence
 
 Hardhat's `npx hardhat node` has no state persistence — all chain state is lost on restart.
 Use Anvil (Foundry) in Docker Compose for a persisted local chain:
 
+The orchestrator handles chain start, contract deploy, and address wiring — you do not run these by hand:
+
 ```bash
-# Start persisted chain
-cd CredChain_Golang && docker compose up -d anvil
-
-# Deploy (first time only — contracts survive restarts)
-INITIAL_SUPER_ADMIN_WALLET_ADDRESS=0x70997970C51812dc3A010C7d01b50e0d17dc79C8 \
-  npx hardhat run scripts/deploy.ts --network localhost
-
-# Run tests (still uses in-process Hardhat — unchanged)
-npx hardhat test
+# Local hybrid: infra + Anvil in Docker, contracts deployed, DB migrated + seeded,
+# then Go on the host via air.
+cd ../CredChain_Golang
+make dev-up          # network + anvil/postgres/mongo, deploy contracts → .env, migrate, seed, seed-chain
+make dev             # air hot-reload
 ```
+
+`make dev-up` runs `scripts/setup-contracts.py`, which deploys via `npx hardhat run scripts/deploy.ts --network localhost` and writes the resulting `AUTHORITY_CONTRACT` / `REGISTRY_CONTRACT` into Go's `.env`. Contracts are deployed once per fresh chain; Anvil state persists across restarts.
 
 State is saved to `CredChain_Golang/docker/anvil/data/state.json` via bind mount.
-On graceful shutdown (docker stop → SIGTERM), Anvil writes the full chain state to this file and auto-loads it on next start.
-
-**Post-deploy setup** (run once — Go runs locally, infrastructure in Docker):
-
-```bash
-# Start infrastructure
-cd CredChain_Golang && docker compose up -d anvil postgres mongo
-
-# Update .env with contract addresses from deploy output
-
-# One-time setup (local Go)
-make migrate-up
-
-# Pick ONE path — they are mutually exclusive:
-# Production: make init-super-admin
-# Testing:    make seed && make seed-chain
-
-# Start backend
-make serve
-```
+On graceful shutdown (docker stop → SIGTERM), Anvil writes the full chain state to this file and auto-loads it on next start. `make fresh` wipes it to force a clean redeploy.
 
 Contracts and chain state survive `docker compose down` and PC reboots.
 Only the database setup needs to be done once per fresh state deletion.
