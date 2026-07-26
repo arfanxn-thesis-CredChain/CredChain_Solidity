@@ -22,7 +22,7 @@ npx hardhat test test/02-credential.test.ts           # run a single test file
 npx hardhat coverage                                  # solidity-coverage report → coverage/ + coverage.json
 npx hardhat clean                                     # remove artifacts/ + cache/
 
-# Local-chain deploy is owned by the orchestrator (CredChain_Golang: make up / dev-up),
+# Local-chain deploy is owned by the orchestrator (CredChain_Golang: make local-up / dev-up),
 # which also wires the new addresses into Go's env. Only real-network deploys are manual:
 npx hardhat run scripts/deploy.ts --network polygon   # deploy to Polygon mainnet
 npx hardhat run scripts/deploy.ts --network amoy      # deploy to Amoy testnet
@@ -294,7 +294,7 @@ make dev             # air hot-reload
 `make dev-up` runs `scripts/setup-contracts.py`, which deploys via `npx hardhat run scripts/deploy.ts --network localhost` and writes the resulting `AUTHORITY_CONTRACT` / `REGISTRY_CONTRACT` into Go's `.env`. Contracts are deployed once per fresh chain; Anvil state persists across restarts.
 
 State is saved to `CredChain_Golang/docker/anvil/data/state.json` via bind mount.
-On graceful shutdown (docker stop → SIGTERM), Anvil writes the full chain state to this file and auto-loads it on next start. `make fresh` wipes it to force a clean redeploy.
+On graceful shutdown (docker stop → SIGTERM), Anvil writes the full chain state to this file and auto-loads it on next start. `make local-fresh` wipes it to force a clean redeploy.
 
 Contracts and chain state survive `docker compose down` and PC reboots.
 Only the database setup needs to be done once per fresh state deletion.
