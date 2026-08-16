@@ -39,6 +39,7 @@ contract CredentialRegistry is CredentialBase, ERC721Upgradeable {
         address revoker;
         uint256 issuedAt;
         uint256 revokedAt;
+        uint256 expiresAt;
         string uri;
     }
 
@@ -343,6 +344,8 @@ contract CredentialRegistry is CredentialBase, ERC721Upgradeable {
             revoker: address(0),
             issuedAt: block.timestamp,
             revokedAt: 0,
+            // ponytail: expiresAt hardwired 0 (no expiry) until Go issuance path + EIP-712 typehash pass a value
+            expiresAt: 0,
             uri: uriStr
         });
 
