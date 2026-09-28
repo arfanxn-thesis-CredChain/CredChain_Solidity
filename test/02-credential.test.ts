@@ -669,15 +669,15 @@ describe("CredentialRegistry", function () {
         ));
     }
 
-    function packIssueCredentials(issuer: string, credentials: { holder: string; hash: string; uri: string; issuedAt: bigint; expiresAt: bigint }[], nonce: number): string {
+    function packIssueCredentials(issuer: string, credentials: { holder: string; hash: string; uri: string; issuedAt: bigint; expiresAt: bigint; number: string }[], nonce: number): string {
         let packed = ethers.solidityPacked(
             ["address", "uint256"],
             [issuer, nonce]
         );
         for (const cred of credentials) {
             packed = ethers.solidityPacked(
-                ["bytes", "address", "string", "string", "uint64", "uint64"],
-                [packed, cred.holder, cred.hash, cred.uri, cred.issuedAt, cred.expiresAt]
+                ["bytes", "address", "string", "string", "uint64", "uint64", "string"],
+                [packed, cred.holder, cred.hash, cred.uri, cred.issuedAt, cred.expiresAt, cred.number]
             );
         }
         return ethers.keccak256(packed);
@@ -722,8 +722,8 @@ it("Should revert on zero address config", async function () {
     describe("batchIssueCredentialsWithSignature", function () {
         it("Should batch issue with struct params", async function () {
             const credentials = [
-                { holder: holder.address, hash: "hash1", uri: "uri1", issuedAt: 0n, expiresAt: 0n },
-                { holder: extraUser.address, hash: "hash2", uri: "uri2", issuedAt: 0n, expiresAt: 0n }
+                { holder: holder.address, hash: "hash1", uri: "uri1", issuedAt: 0n, expiresAt: 0n, number: "NUM1" },
+                { holder: extraUser.address, hash: "hash2", uri: "uri2", issuedAt: 0n, expiresAt: 0n, number: "NUM2" }
             ];
             const nonce = await registry.userToNonce(issuer.address);
             const digest = packIssueCredentials(issuer.address, credentials, nonce);
@@ -741,12 +741,14 @@ it("Should revert on zero address config", async function () {
             const credId1 = computeCredentialId(issuer.address, nonce, holder.address, "hash1");
             const cred = await registry.findCredential(credId1);
             expect(cred.holder).to.equal(holder.address);
+            expect(cred.number).to.equal("NUM1");
+            expect(cred.activatedAt).to.be.greaterThan(0n);
         });
 
-        it("Should store the issuance issuedAt and expiresAt on chain", async function () {
+        it("Should store the issuance issuedAt, expiresAt, activatedAt, and number on chain", async function () {
             const credentials = [{
                 holder: holder.address, hash: "datesHash", uri: "datesUri",
-                issuedAt: 1750000000n, expiresAt: 1735689600n
+                issuedAt: 1750000000n, expiresAt: 1735689600n, number: "CRED-12345"
             }];
             const nonce = await registry.userToNonce(issuer.address);
             const digest = packIssueCredentials(issuer.address, credentials, nonce);
@@ -754,26 +756,33 @@ it("Should revert on zero address config", async function () {
 
             const credId = computeCredentialId(issuer.address, nonce, holder.address, "datesHash");
 
-            await expect(
-                registry.batchIssueCredentialsWithSignature({
-                    issuer: issuer.address, credentials: credentials, nonce: nonce, signature: signature
-                })
-            ).to.emit(registry, "CredentialIssued")
-             .withArgs(credId, holder.address, issuer.address, 1750000000n, 1735689600n);
+            const tx = await registry.batchIssueCredentialsWithSignature({
+                issuer: issuer.address, credentials: credentials, nonce: nonce, signature: signature
+            });
+            const receipt = await tx.wait();
+            const block = await ethers.provider.getBlock(receipt!.blockNumber);
+
+            await expect(tx)
+                .to.emit(registry, "CredentialIssued")
+                .withArgs(credId, holder.address, issuer.address, 1750000000n, 1735689600n, BigInt(block!.timestamp), "CRED-12345");
 
             const cred = await registry.findCredential(credId);
             expect(cred.issuedAt).to.equal(1750000000n);
             expect(cred.expiresAt).to.equal(1735689600n);
+            expect(cred.activatedAt).to.equal(BigInt(block!.timestamp));
+            expect(cred.number).to.equal("CRED-12345");
 
             const byIds = await registry.getCredentialsByIds([credId]);
             expect(byIds[0].issuedAt).to.equal(1750000000n);
             expect(byIds[0].expiresAt).to.equal(1735689600n);
+            expect(byIds[0].activatedAt).to.equal(BigInt(block!.timestamp));
+            expect(byIds[0].number).to.equal("CRED-12345");
         });
 
         it("Should store zero business dates when the issuance passes 0", async function () {
             const credentials = [{
                 holder: holder.address, hash: "zeroDatesHash", uri: "zeroDatesUri",
-                issuedAt: 0n, expiresAt: 0n
+                issuedAt: 0n, expiresAt: 0n, number: ""
             }];
             const nonce = await registry.userToNonce(issuer.address);
             const digest = packIssueCredentials(issuer.address, credentials, nonce);
@@ -787,12 +796,14 @@ it("Should revert on zero address config", async function () {
             const cred = await registry.findCredential(credId);
             expect(cred.issuedAt).to.equal(0n);
             expect(cred.expiresAt).to.equal(0n);
+            expect(cred.number).to.equal("");
+            expect(cred.activatedAt).to.be.greaterThan(0n);
         });
 
         it("Should revert when the submitted issuedAt differs from the signed one", async function () {
             const credentials = [{
                 holder: holder.address, hash: "tamperIssuedHash", uri: "tamperIssuedUri",
-                issuedAt: 1750000000n, expiresAt: 0n
+                issuedAt: 1750000000n, expiresAt: 0n, number: ""
             }];
             const nonce = await registry.userToNonce(issuer.address);
             const digest = packIssueCredentials(issuer.address, credentials, nonce);
@@ -800,7 +811,7 @@ it("Should revert on zero address config", async function () {
 
             const tampered = [{
                 holder: holder.address, hash: "tamperIssuedHash", uri: "tamperIssuedUri",
-                issuedAt: 999n, expiresAt: 0n
+                issuedAt: 999n, expiresAt: 0n, number: ""
             }];
 
             await expect(
@@ -813,7 +824,7 @@ it("Should revert on zero address config", async function () {
         it("Should revert when the submitted expiresAt differs from the signed one", async function () {
             const credentials = [{
                 holder: holder.address, hash: "tamperExpiryHash", uri: "tamperExpiryUri",
-                issuedAt: 1750000000n, expiresAt: 1735689600n
+                issuedAt: 1750000000n, expiresAt: 1735689600n, number: ""
             }];
             const nonce = await registry.userToNonce(issuer.address);
             const digest = packIssueCredentials(issuer.address, credentials, nonce);
@@ -821,7 +832,28 @@ it("Should revert on zero address config", async function () {
 
             const tampered = [{
                 holder: holder.address, hash: "tamperExpiryHash", uri: "tamperExpiryUri",
-                issuedAt: 1750000000n, expiresAt: 999n
+                issuedAt: 1750000000n, expiresAt: 999n, number: ""
+            }];
+
+            await expect(
+                registry.batchIssueCredentialsWithSignature({
+                    issuer: issuer.address, credentials: tampered, nonce: nonce, signature: signature
+                })
+            ).to.be.revertedWithCustomError(registry, "InvalidSignatureError");
+        });
+
+        it("Should revert when the submitted number differs from the signed one", async function () {
+            const credentials = [{
+                holder: holder.address, hash: "tamperNumHash", uri: "tamperNumUri",
+                issuedAt: 1750000000n, expiresAt: 0n, number: "ORIG-NUM"
+            }];
+            const nonce = await registry.userToNonce(issuer.address);
+            const digest = packIssueCredentials(issuer.address, credentials, nonce);
+            const signature = await issuer.signMessage(ethers.getBytes(digest));
+
+            const tampered = [{
+                holder: holder.address, hash: "tamperNumHash", uri: "tamperNumUri",
+                issuedAt: 1750000000n, expiresAt: 0n, number: "TAMPER-NUM"
             }];
 
             await expect(
@@ -832,7 +864,7 @@ it("Should revert on zero address config", async function () {
         });
 
         it("Should batch issue via relayer", async function () {
-            const credentials = [{ holder: holder.address, hash: "relayerHash", uri: "relayerUri", issuedAt: 0n, expiresAt: 0n }];
+            const credentials = [{ holder: holder.address, hash: "relayerHash", uri: "relayerUri", issuedAt: 0n, expiresAt: 0n, number: "" }];
             const nonce = await registry.userToNonce(issuer.address);
             const digest = packIssueCredentials(issuer.address, credentials, nonce);
             const signature = await issuer.signMessage(ethers.getBytes(digest));
@@ -850,7 +882,7 @@ it("Should revert on zero address config", async function () {
         });
 
         it("Should revert on invalid signature", async function () {
-            const credentials = [{ holder: holder.address, hash: "hash1", uri: "uri1", issuedAt: 0n, expiresAt: 0n }];
+            const credentials = [{ holder: holder.address, hash: "hash1", uri: "uri1", issuedAt: 0n, expiresAt: 0n, number: "" }];
             const nonce = await registry.userToNonce(issuer.address);
             const digest = packIssueCredentials(issuer.address, credentials, nonce);
             const signature = await extraUser.signMessage(ethers.getBytes(digest));
@@ -866,7 +898,7 @@ it("Should revert on zero address config", async function () {
         });
 
         it("Should prevent replay attack", async function () {
-            const credentials = [{ holder: holder.address, hash: "hashReplay", uri: "uriReplay", issuedAt: 0n, expiresAt: 0n }];
+            const credentials = [{ holder: holder.address, hash: "hashReplay", uri: "uriReplay", issuedAt: 0n, expiresAt: 0n, number: "" }];
             const nonce = await registry.userToNonce(issuer.address);
             const digest = packIssueCredentials(issuer.address, credentials, nonce);
             const signature = await issuer.signMessage(ethers.getBytes(digest));
@@ -889,7 +921,7 @@ it("Should revert on zero address config", async function () {
         });
 
         it("Should revert on duplicate credential (same holder, same hash, active)", async function () {
-            const credentials = [{ holder: holder.address, hash: "duplicateHash", uri: "uri1", issuedAt: 0n, expiresAt: 0n }];
+            const credentials = [{ holder: holder.address, hash: "duplicateHash", uri: "uri1", issuedAt: 0n, expiresAt: 0n, number: "" }];
             const nonce = await registry.userToNonce(issuer.address);
             const digest = packIssueCredentials(issuer.address, credentials, nonce);
             const signature = await issuer.signMessage(ethers.getBytes(digest));
@@ -913,7 +945,7 @@ it("Should revert on zero address config", async function () {
         });
 
         it("Should revert on zero address holder", async function () {
-            const credentials = [{ holder: ethers.ZeroAddress, hash: "hash1", uri: "uri1", issuedAt: 0n, expiresAt: 0n }];
+            const credentials = [{ holder: ethers.ZeroAddress, hash: "hash1", uri: "uri1", issuedAt: 0n, expiresAt: 0n, number: "" }];
             const nonce = await registry.userToNonce(issuer.address);
             const digest = packIssueCredentials(issuer.address, credentials, nonce);
             const signature = await issuer.signMessage(ethers.getBytes(digest));
@@ -929,14 +961,15 @@ it("Should revert on zero address config", async function () {
         });
 
         it("Should revert when batch size exceeds MAX_BATCH_CREDENTIAL", async function () {
-            const credentials: { holder: string; hash: string; uri: string; issuedAt: bigint; expiresAt: bigint }[] = [];
+            const credentials: { holder: string; hash: string; uri: string; issuedAt: bigint; expiresAt: bigint; number: string }[] = [];
             for (let i = 0; i < 101; i++) {
                 credentials.push({
                     holder: ethers.Wallet.createRandom().address,
                     hash: `hash${i}`,
                     uri: `uri${i}`,
                     issuedAt: 0n,
-                    expiresAt: 0n
+                    expiresAt: 0n,
+                    number: ""
                 });
             }
             const nonce = await registry.userToNonce(issuer.address);
@@ -954,7 +987,7 @@ it("Should revert on zero address config", async function () {
         });
 
         it("Should emit CredentialIssued event", async function () {
-            const credentials = [{ holder: holder.address, hash: "eventHash", uri: "eventUri", issuedAt: 0n, expiresAt: 0n }];
+            const credentials = [{ holder: holder.address, hash: "eventHash", uri: "eventUri", issuedAt: 0n, expiresAt: 0n, number: "" }];
             const nonce = await registry.userToNonce(issuer.address);
             const digest = packIssueCredentials(issuer.address, credentials, nonce);
             const signature = await issuer.signMessage(ethers.getBytes(digest));
@@ -970,7 +1003,7 @@ it("Should revert on zero address config", async function () {
         });
 
         it("Should allow re-issuing same hash for same holder after revoke", async function () {
-            const credentials = [{ holder: holder.address, hash: "reissueHash", uri: "uri1", issuedAt: 0n, expiresAt: 0n }];
+            const credentials = [{ holder: holder.address, hash: "reissueHash", uri: "uri1", issuedAt: 0n, expiresAt: 0n, number: "" }];
             let nonce = await registry.userToNonce(issuer.address);
             let digest = packIssueCredentials(issuer.address, credentials, nonce);
             let signature = await issuer.signMessage(ethers.getBytes(digest));
@@ -1001,7 +1034,7 @@ it("Should revert on zero address config", async function () {
             const hash = "0x" + "ab".repeat(32);
             const uri = "ipfs://test";
 
-            const credsA = [{ holder: holder.address, hash, uri, issuedAt: 0n, expiresAt: 0n }];
+            const credsA = [{ holder: holder.address, hash, uri, issuedAt: 0n, expiresAt: 0n, number: "" }];
             const nonceA = await registry.userToNonce(issuer.address);
             const digestA = packIssueCredentials(issuer.address, credsA, nonceA);
             const sigA = await issuer.signMessage(ethers.getBytes(digestA));
@@ -1012,7 +1045,7 @@ it("Should revert on zero address config", async function () {
                 signature: sigA,
             });
 
-            const credsB = [{ holder: extraUser.address, hash, uri, issuedAt: 0n, expiresAt: 0n }];
+            const credsB = [{ holder: extraUser.address, hash, uri, issuedAt: 0n, expiresAt: 0n, number: "" }];
             const nonceB = await registry.userToNonce(issuer.address);
             const digestB = packIssueCredentials(issuer.address, credsB, nonceB);
             const sigB = await issuer.signMessage(ethers.getBytes(digestB));
@@ -1030,7 +1063,7 @@ it("Should revert on zero address config", async function () {
             const hash = "0x" + "cd".repeat(32);
             const uri = "ipfs://test";
 
-            const credsA = [{ holder: holder.address, hash, uri, issuedAt: 0n, expiresAt: 0n }];
+            const credsA = [{ holder: holder.address, hash, uri, issuedAt: 0n, expiresAt: 0n, number: "" }];
             let nonce = await registry.userToNonce(issuer.address);
             const issueDigestA = packIssueCredentials(issuer.address, credsA, nonce);
             let sig = await issuer.signMessage(ethers.getBytes(issueDigestA));
@@ -1052,7 +1085,7 @@ it("Should revert on zero address config", async function () {
                 signature: sig,
             });
 
-            const credsB = [{ holder: extraUser.address, hash, uri, issuedAt: 0n, expiresAt: 0n }];
+            const credsB = [{ holder: extraUser.address, hash, uri, issuedAt: 0n, expiresAt: 0n, number: "" }];
             nonce = await registry.userToNonce(issuer.address);
             const issueDigestB = packIssueCredentials(issuer.address, credsB, nonce);
             sig = await issuer.signMessage(ethers.getBytes(issueDigestB));
@@ -1072,7 +1105,7 @@ it("Should revert on zero address config", async function () {
 
         beforeEach(async function () {
             // Issue a credential first
-            const credentials = [{ holder: holder.address, hash: "revokeHash", uri: "revokeUri", issuedAt: 0n, expiresAt: 0n }];
+            const credentials = [{ holder: holder.address, hash: "revokeHash", uri: "revokeUri", issuedAt: 0n, expiresAt: 0n, number: "" }];
             const nonce = await registry.userToNonce(issuer.address);
             const digest = packIssueCredentials(issuer.address, credentials, nonce);
             const signature = await issuer.signMessage(ethers.getBytes(digest));
@@ -1192,7 +1225,7 @@ it("Should revert on zero address config", async function () {
 
     describe("Soulbound behavior", function () {
         it("Should prevent transfer of credentials", async function () {
-            const credentials = [{ holder: holder.address, hash: "soulboundHash", uri: "soulboundUri", issuedAt: 0n, expiresAt: 0n }];
+            const credentials = [{ holder: holder.address, hash: "soulboundHash", uri: "soulboundUri", issuedAt: 0n, expiresAt: 0n, number: "" }];
             const nonce = await registry.userToNonce(issuer.address);
             const digest = packIssueCredentials(issuer.address, credentials, nonce);
             const signature = await issuer.signMessage(ethers.getBytes(digest));
@@ -1212,7 +1245,7 @@ it("Should revert on zero address config", async function () {
         });
 
         it("Should prevent safeTransferFrom of credentials", async function () {
-            const credentials = [{ holder: holder.address, hash: "safeTransferHash", uri: "safeTransferUri", issuedAt: 0n, expiresAt: 0n }];
+            const credentials = [{ holder: holder.address, hash: "safeTransferHash", uri: "safeTransferUri", issuedAt: 0n, expiresAt: 0n, number: "" }];
             const nonce = await registry.userToNonce(issuer.address);
             const digest = packIssueCredentials(issuer.address, credentials, nonce);
             const signature = await issuer.signMessage(ethers.getBytes(digest));
@@ -1238,8 +1271,8 @@ it("Should revert on zero address config", async function () {
 
         beforeEach(async function () {
             const credentials = [
-                { holder: holder.address, hash: "queryHash1", uri: "queryUri1", issuedAt: 0n, expiresAt: 0n },
-                { holder: holder.address, hash: "queryHash2", uri: "queryUri2", issuedAt: 0n, expiresAt: 0n }
+                { holder: holder.address, hash: "queryHash1", uri: "queryUri1", issuedAt: 0n, expiresAt: 0n, number: "NUM-Q1" },
+                { holder: holder.address, hash: "queryHash2", uri: "queryUri2", issuedAt: 0n, expiresAt: 0n, number: "NUM-Q2" }
             ];
             const nonce = await registry.userToNonce(issuer.address);
             const digest = packIssueCredentials(issuer.address, credentials, nonce);
@@ -1260,6 +1293,8 @@ it("Should revert on zero address config", async function () {
             const cred = await registry.findCredential(credentialId1);
             expect(cred.holder).to.equal(holder.address);
             expect(cred.hash).to.equal("queryHash1");
+            expect(cred.number).to.equal("NUM-Q1");
+            expect(cred.activatedAt).to.be.greaterThan(0n);
         });
 
         it("Should revert when credential not found", async function () {
@@ -1274,7 +1309,11 @@ it("Should revert on zero address config", async function () {
             const creds = await registry.getCredentialsByIds([credentialId1, credentialId2]);
             expect(creds.length).to.equal(2);
             expect(creds[0].hash).to.equal("queryHash1");
+            expect(creds[0].number).to.equal("NUM-Q1");
+            expect(creds[0].activatedAt).to.be.greaterThan(0n);
             expect(creds[1].hash).to.equal("queryHash2");
+            expect(creds[1].number).to.equal("NUM-Q2");
+            expect(creds[1].activatedAt).to.be.greaterThan(0n);
         });
 
         it("Should paginate credentials", async function () {
@@ -1307,7 +1346,7 @@ it("Should revert on zero address config", async function () {
             it("Should return Issued for active hash after issue", async function () {
                 const hash = "0x" + "ef".repeat(32);
                 const uri = "ipfs://test";
-                const creds = [{ holder: holder.address, hash, uri, issuedAt: 0n, expiresAt: 0n }];
+                const creds = [{ holder: holder.address, hash, uri, issuedAt: 0n, expiresAt: 0n, number: "" }];
                 const nonce = await registry.userToNonce(issuer.address);
                 const issueDigest = packIssueCredentials(issuer.address, creds, nonce);
                 const sig = await issuer.signMessage(ethers.getBytes(issueDigest));
@@ -1325,7 +1364,7 @@ it("Should revert on zero address config", async function () {
             it("Should return Revoked for revoked hash", async function () {
                 const hash = "0x" + "ff".repeat(32);
                 const uri = "ipfs://test";
-                const creds = [{ holder: holder.address, hash, uri, issuedAt: 0n, expiresAt: 0n }];
+                const creds = [{ holder: holder.address, hash, uri, issuedAt: 0n, expiresAt: 0n, number: "" }];
                 let nonce = await registry.userToNonce(issuer.address);
                 const issueDigest = packIssueCredentials(issuer.address, creds, nonce);
                 let sig = await issuer.signMessage(ethers.getBytes(issueDigest));
@@ -1359,14 +1398,15 @@ it("Should revert on zero address config", async function () {
 
     describe("MAX_BATCH_CREDENTIAL enforcement", function () {
         it("Should revert when issue batch exceeds limit", async function () {
-            const credentials: { holder: string; hash: string; uri: string; issuedAt: bigint; expiresAt: bigint }[] = [];
+            const credentials: { holder: string; hash: string; uri: string; issuedAt: bigint; expiresAt: bigint; number: string }[] = [];
             for (let i = 0; i < 101; i++) {
                 credentials.push({
                     holder: holder.address,
                     hash: `maxBatchHash${i}`,
                     uri: `maxBatchUri${i}`,
                     issuedAt: 0n,
-                    expiresAt: 0n
+                    expiresAt: 0n,
+                    number: ""
                 });
             }
             const nonce = await registry.userToNonce(issuer.address);
@@ -1386,8 +1426,8 @@ it("Should revert on zero address config", async function () {
         it("Should revert when revoke batch exceeds limit", async function () {
             // Issue 2 credentials first
             const credentials = [
-                { holder: holder.address, hash: "revokeMax1", uri: "uri1", issuedAt: 0n, expiresAt: 0n },
-                { holder: holder.address, hash: "revokeMax2", uri: "uri2", issuedAt: 0n, expiresAt: 0n }
+                { holder: holder.address, hash: "revokeMax1", uri: "uri1", issuedAt: 0n, expiresAt: 0n, number: "" },
+                { holder: holder.address, hash: "revokeMax2", uri: "uri2", issuedAt: 0n, expiresAt: 0n, number: "" }
             ];
             const nonce = await registry.userToNonce(issuer.address);
             const digest = packIssueCredentials(issuer.address, credentials, nonce);

@@ -40,7 +40,9 @@ contract CredentialRegistry is CredentialBase, ERC721Upgradeable {
         uint256 issuedAt;
         uint256 revokedAt;
         uint256 expiresAt;
+        uint256 activatedAt;
         string uri;
+        string number;
     }
 
     /// @notice Maps credential ID to its full credential data.
@@ -65,12 +67,16 @@ contract CredentialRegistry is CredentialBase, ERC721Upgradeable {
     /// @param issuer The address that issued the credential
     /// @param issuedAt Issue date in seconds since epoch
     /// @param expiresAt Expiry timestamp in seconds since epoch (0 = no expiry)
+    /// @param activatedAt Mint/activation timestamp in seconds since epoch
+    /// @param number Human-readable credential number
     event CredentialIssued(
         uint256 indexed id,
         address indexed holder,
         address indexed issuer,
         uint64 issuedAt,
-        uint64 expiresAt
+        uint64 expiresAt,
+        uint64 activatedAt,
+        string number
     );
 
     /// @notice Emitted when a credential is revoked.
@@ -134,6 +140,7 @@ contract CredentialRegistry is CredentialBase, ERC721Upgradeable {
         string uri;
         uint64 issuedAt;  // issue date in seconds since epoch (business date, not block.timestamp)
         uint64 expiresAt; // 0 means no expiry
+        string number;
     }
 
     /// @notice Struct containing parameters for batch credential issuance with signature.
@@ -183,6 +190,7 @@ contract CredentialRegistry is CredentialBase, ERC721Upgradeable {
                 params.credentials[i].holder,
                 params.credentials[i].hash,
                 params.credentials[i].uri,
+                params.credentials[i].number,
                 params.issuer,
                 params.credentials[i].issuedAt,
                 params.credentials[i].expiresAt
@@ -334,6 +342,7 @@ contract CredentialRegistry is CredentialBase, ERC721Upgradeable {
     /// @param holder The credential holder
     /// @param hashStr The document hash
     /// @param uriStr The metadata URI
+    /// @param numberStr The credential number
     /// @param issuer The issuing address
     /// @param issuedAt Issue date in seconds since epoch
     /// @param expiresAt Expiry timestamp in seconds since epoch (0 = no expiry)
@@ -342,6 +351,7 @@ contract CredentialRegistry is CredentialBase, ERC721Upgradeable {
         address holder,
         string memory hashStr,
         string memory uriStr,
+        string memory numberStr,
         address issuer,
         uint64 issuedAt,
         uint64 expiresAt
@@ -357,13 +367,15 @@ contract CredentialRegistry is CredentialBase, ERC721Upgradeable {
             issuedAt: issuedAt,
             revokedAt: 0,
             expiresAt: expiresAt,
-            uri: uriStr
+            activatedAt: block.timestamp,
+            uri: uriStr,
+            number: numberStr
         });
 
         credentials.push(id);
         holderToCredentialIds[holder].push(id);
 
-        emit CredentialIssued(id, holder, issuer, issuedAt, expiresAt);
+        emit CredentialIssued(id, holder, issuer, issuedAt, expiresAt, uint64(block.timestamp), numberStr);
 
         bytes32 fileHashBytes = keccak256(abi.encodePacked(hashStr));
         credentialHashToStatus[fileHashBytes] = CredentialStatus.Issued;
@@ -423,7 +435,8 @@ contract CredentialRegistry is CredentialBase, ERC721Upgradeable {
                 issuances[i].hash,
                 issuances[i].uri,
                 issuances[i].issuedAt,
-                issuances[i].expiresAt
+                issuances[i].expiresAt,
+                issuances[i].number
             );
         }
 
