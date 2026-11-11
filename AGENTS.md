@@ -16,7 +16,7 @@ Sibling to `CredChain_Golang/` (backend API), `CredChain_React/` (frontend), and
 
 ```bash
 make compile                                          # compile contracts → artifacts/ + typechain-types/
-make test                                             # run all tests (69 tests, chai/mocha)
+make test                                             # run all contract tests (chai/mocha)
 
 npx hardhat test test/02-credential.test.ts           # run a single test file
 npx hardhat coverage                                  # solidity-coverage report → coverage/ + coverage.json
@@ -28,7 +28,7 @@ npx hardhat run scripts/deploy.ts --network polygon   # deploy to Polygon mainne
 npx hardhat run scripts/deploy.ts --network amoy      # deploy to Amoy testnet
 ```
 
-No CI pipeline is configured. No lint script exists in `package.json`. Tests must pass before any push (see Deployment section).
+`.github/workflows/ci.yml` compiles and tests contracts on pushes to `master` using Node 20 and `npm ci`. No lint script exists in `package.json`. Tests must pass before any push (see Deployment section).
 
 ## Environment Setup
 
@@ -37,7 +37,7 @@ Copy `.env.example` → `.env` and fill in:
 ```bash
 PRIVATE_KEY=<deployer_private_key>                            # 64-char hex, no 0x prefix
 POLYGON_RPC_URL=https://polygon-rpc.com/
-MUMBAI_RPC_URL=https://rpc-mumbai.maticvigil.com/
+AMOY_RPC_URL=<amoy_rpc_url>
 INITIAL_SUPER_ADMIN_WALLET_ADDRESS=0x...                      # REQUIRED at deploy time
 ```
 
@@ -55,8 +55,8 @@ CredChain_Solidity/
   scripts/
     deploy.ts                    # deploys + initializes all 3 contracts in order
   test/
-    01-deploy.test.ts            # 2 tests: deployment env-var validation
-    02-credential.test.ts        # 67 tests: contract behavior across all 4 contracts
+    01-deploy.test.ts            # deployment env-var validation
+    02-credential.test.ts        # contract behavior across the concrete contracts
   artifacts/                     # compiled contract artifacts (gitignored)
   cache/                         # hardhat compilation cache (gitignored)
   typechain-types/               # generated TypeScript bindings (gitignored)
@@ -69,13 +69,13 @@ CredChain_Solidity/
   .env / .env.example            # .env gitignored
 ```
 
-All four contracts inherit from `CredentialBase`. `Config` is the only contract holding addresses; `Authority` and `Registry` reach each other through `Config`.
+The three concrete contracts inherit from abstract `CredentialBase`. `Config` stores Authority and Registry addresses. Registry resolves Authority through Config; Authority stores its Config reference but does not currently call Registry.
 
 ## Key Patterns & Conventions
 
 ### Contract Inheritance & Initializable Pattern
 
-All four contracts inherit from `CredentialBase`, which itself extends OpenZeppelin's `Initializable`. State setup happens in `initialize(...)` functions guarded by the `initializer` modifier — **not in constructors**. Constructors only set the `deployer` immutable. This pattern keeps the contracts upgrade-ready (even though no upgrade proxy is currently deployed) and ensures every contract can be wired post-deploy without circular-dependency problems.
+The three concrete contracts inherit from `CredentialBase`, which extends OpenZeppelin's `Initializable`. State setup happens in `initialize(...)` functions guarded by `initializer`, while constructors set the `deployer` immutable. This permits post-deploy wiring. No upgrade proxy or upgrade mechanism is deployed; initialization alone does not establish upgrade safety.
 
 `_requireDeployer()` (defined in `CredentialBase`) gates every `initialize` function so only the original deployer can wire the system.
 
@@ -128,7 +128,7 @@ Replay protection: every signature includes the current `userToNonce[signer]`; t
 
 `CredentialRegistry._update(to, tokenId, auth)` overrides the OpenZeppelin ERC-721 hook. If `from != address(0)` (i.e., the transition is anything other than a mint), it reverts with `CredentialTransferError`. This blocks all transfers AND burns. Credentials can only be issued (`_mint`) and revoked (logical revoke via `revokedAt` timestamp; the NFT remains owned by the holder).
 
-There is no `burn`, `transferFrom`, `safeTransferFrom`, or `approve` path that escapes this — the override applies to every state-changing token operation.
+`transferFrom` and `safeTransferFrom` cannot bypass this hook, and there is no public burn function. Inherited `approve` and `setApprovalForAll` remain callable because approvals do not invoke `_update`; approval still cannot enable a transfer.
 
 ### Deploy Order & `scripts/deploy.ts`
 
@@ -163,14 +163,14 @@ Do not change these without re-running the full test suite and re-generating abi
 
 - Shared errors (see Error Naming above)
 - `address internal immutable deployer` set in constructor
-- `_requireDeployer()` modifier gate
+- `_requireDeployer()` internal view function enforces the deployer-only gate
 - No state beyond `deployer`; no public functions
 
 #### `CredentialConfig`
 
 - State: `address public authority`, `address public registry`
 - `initialize(address _authority, address _registry)` — deployer-only, one-time
-- Read by both `Authority` and `Registry` as a service locator
+- Registry reads `authority()` for role checks; Authority retains a Config reference without a current Registry lookup
 
 #### `CredentialAuthority`
 
@@ -189,17 +189,18 @@ Do not change these without re-running the full test suite and re-generating abi
 #### `CredentialRegistry`
 
 - Extends `ERC721Upgradeable` + `CredentialBase`. Name `"CredChain Credential"`, symbol `"CCC"`.
-- Structs: `Credential { id, holder, hash, issuer, revoker, issuedAt, revokedAt, uri }`, `CredentialHashStatus { hash, status }`
-- Enum: `CredentialStatus { None, Issued, Revoked }`
+- Structs: `Credential { id, holder, hash, issuer, revoker, issuedAt, revokedAt, expiresAt, activatedAt, uri, number }`, `CredentialHashStatus { hash, status }`
+- Issuance payload: `CredentialIssuance { holder, hash, uri, issuedAt, expiresAt, number }`; the signature covers these fields. `issuedAt` is the certificate's business date, `expiresAt=0` means no expiry, and minting sets `activatedAt` from block time.
+- Enum: `CredentialStatus { None, Issued, Revoked }`. Dates are stored, but expiry does not automatically change this on-chain status or release the duplicate-hash restriction.
 - State: `config` (typed `CredentialConfig`), `credentialIdToCredential`, `holderToCredentialIds`, `userToNonce`, `credentials[]`, `credentialHashToStatus`
 - Constants: `MAX_BATCH_CREDENTIAL = 100`
-- Events: `CredentialIssued(id, holder, issuer)`, `CredentialRevoked(id, revoker)`
+- Events: `CredentialIssued(id, holder, issuer, issuedAt, expiresAt, activatedAt, number)`, `CredentialRevoked(id, revoker)`
 - Token ID: `uint256(keccak256(abi.encodePacked(issuer, nonce, holder, hash)))`
 - Duplicate check: global via `credentialHashToStatus` (blocked if Issued for any holder, allowed if Revoked)
 - Methods:
   - `initialize(_config)`
-  - `batchIssueCredentialsWithSignature(params)` — gated by `onlyRoleOrAbove(issuer, Issuer)`; sets `credentialHashToStatus[hash]=Issued`
-  - `batchRevokeCredentialsWithSignature(params)` — gated by `onlyRoleOrAbove(revoker, Issuer)`; sets `credentialHashToStatus[hash]=Revoked`
+  - `batchIssueCredentialsWithSignature(params)`: gated by `onlyRoleOrAbove(issuer, Issuer)`; sets `credentialHashToStatus[keccak256(abi.encodePacked(hash))]=Issued`
+  - `batchRevokeCredentialsWithSignature(params)`: gated by `onlyRoleOrAbove(revoker, Issuer)`; sets `credentialHashToStatus[keccak256(abi.encodePacked(hash))]=Revoked`
   - `paginateCredentials(offset, limit) → Credential[]`
   - `paginateCredentialsByHolder(holder, offset, limit) → Credential[]`
   - `getCredentialsByIds(ids[]) → Credential[]`
@@ -212,7 +213,7 @@ Do not change these without re-running the full test suite and re-generating abi
 
 | Var | Required | Purpose |
 |---|---|---|
-| `PRIVATE_KEY` | only for `--network polygon`/`mumbai` | deployer + tx signer |
+| `PRIVATE_KEY` | for real-network deployments (`polygon`/`amoy`; legacy `mumbai`) | deployer + tx signer |
 | `POLYGON_RPC_URL` | only for `--network polygon` | RPC endpoint |
 | `MUMBAI_RPC_URL` | only for `--network mumbai` | RPC endpoint |
 | `AMOY_RPC_URL` | only for `--network amoy` | Polygon Amoy testnet RPC URL |
@@ -225,8 +226,8 @@ No env vars are needed for `npx hardhat test` (runs in-process).
 
 - **Framework:** Chai 4.5 + Mocha + Hardhat Network (in-process EVM)
 - **Files:**
-  - `test/01-deploy.test.ts` — 2 tests, validates deployment env-var requirements
-  - `test/02-credential.test.ts` — 67 tests, full behavioral coverage of all 4 contracts
+  - `test/01-deploy.test.ts`: deployment env-var requirements
+  - `test/02-credential.test.ts`: issuance, revocation, signatures, dates, and role behavior. Test declarations are not a measured passing count or proof of complete coverage.
 - **Coverage:** `coverage.json` — coverage summary (gitignored — regenerate with `npx hardhat coverage`)
 - **Style:** white-box, in-repo, asserts against revert errors by name (e.g. `.to.be.revertedWithCustomError(contract, "InvalidNonceError")`)
 - **No integration tests against real RPC** — Hardhat in-process is the only target
@@ -313,5 +314,5 @@ Only the database setup needs to be done once per fresh state deletion.
 - `hardhat.config.ts` — compiler + network configuration
 - `scripts/deploy.ts` — canonical deployment flow
 - `coverage.json` — last recorded test coverage
-- `../AGENTS.md` (workspace root, uncommitted) — multi-repo reference
+- `../AGENTS.md` (workspace root): multi-repo reference
 - `../CredChain_Golang/AGENTS.md` — backend consumer of these contracts

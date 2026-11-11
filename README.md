@@ -4,7 +4,7 @@ Solidity contracts for the CredChain decentralized credential platform.
 
 ## Stack
 
-Solidity 0.8.24 · Hardhat 2.28 · OpenZeppelin 5.6.1 · TypeScript · Chai + Mocha (69 tests)
+Solidity 0.8.24 · Hardhat 2.28 · OpenZeppelin 5.6.1 · TypeScript · Chai + Mocha
 
 ## Contracts
 
@@ -19,7 +19,7 @@ Solidity 0.8.24 · Hardhat 2.28 · OpenZeppelin 5.6.1 · TypeScript · Chai + Mo
 
 `None(0) → Holder(1) → Issuer(2) → Admin(3) → SuperAdmin(4)`
 
-Mirrored across all CredChain components (Go, React, Python consume this schema).
+Go mirrors this numeric chain enum. Go database roles and React use four string application roles without `None`; Python does not define platform roles.
 
 ## Quick Start
 
@@ -52,7 +52,7 @@ Mumbai is deprecated (retired April 2024). Use Amoy instead.
 | Command | Purpose |
 |---|---|
 | `make compile` | Compile contracts |
-| `make test` | Run 69 tests |
+| `make test` | Run contract tests |
 | `npx hardhat coverage` | Generate coverage report |
 | `npx hardhat test test/<file>` | Run a single test file |
 
